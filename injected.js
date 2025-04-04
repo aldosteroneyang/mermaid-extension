@@ -48,6 +48,49 @@
       background-color: #f8d7da;
       color: #721c24;
     }
+    
+    /* 放大鏡樣式 */
+    .magnifier-glass {
+      position: absolute;
+      border: 2px solid #999;
+      border-radius: 0;
+      cursor: none;
+      width: 50%;
+      height: 50%;
+      display: none;
+      background-repeat: no-repeat;
+      z-index: 1000;
+      box-shadow: 0 0 10px rgba(0,0,0,0.3);
+      pointer-events: none; /* 防止放大鏡阻擋滑鼠事件 */
+      background-color: white; /* 確保背景不透明 */
+    }
+    
+    /* 圖片容器 */
+    .mermaid-img-container {
+      position: relative;
+      display: inline-block;
+      max-width: 100%;
+    }
+    
+    /* 圖片樣式 */
+    .mermaid-img {
+      cursor: zoom-in;
+    }
+    
+    /* 放大鏡開關按鈕 */
+    .toggle-magnifier {
+      background-color: #e0e0e0;
+      border-color: #ccc;
+    }
+    .toggle-magnifier.active {
+      background-color: #c0c0c0;
+      border-color: #999;
+    }
+    
+    /* 放大鏡啟用時的游標樣式 */
+    .magnifier-active {
+      cursor: crosshair;
+    }
   `;
   document.head.appendChild(styleEl);
 
@@ -102,16 +145,27 @@
     };
     
     try {
+      // 使用快取避免重複編碼
+      if (window._mermaidCache && window._mermaidCache[mermaidCode]) {
+        return window._mermaidCache[mermaidCode];
+      }
+      
       const jsonStr = JSON.stringify(payload);
       const jsonUint8 = new TextEncoder().encode(jsonStr);
       const compressed = pako.deflate(jsonUint8);
       const binaryStr = Array.from(compressed)
         .map(byte => String.fromCharCode(byte))
         .join('');
-      return btoa(binaryStr)
+      const result = btoa(binaryStr)
         .replace(/\+/g, '-')
         .replace(/\//g, '_')
         .replace(/=+$/, '');
+      
+      // 儲存到快取
+      if (!window._mermaidCache) window._mermaidCache = {};
+      window._mermaidCache[mermaidCode] = result;
+      
+      return result;
     } catch (error) {
       console.warn('編碼 Mermaid 代碼時出錯:', error);
       return '';
@@ -216,6 +270,7 @@
         imgElem.alt = "Mermaid Diagram";
         imgElem.style.display = 'block';
         imgElem.style.maxWidth = '100%';
+        imgElem.className = 'mermaid-img';
         
         // 圖片錯誤處理
         imgElem.onerror = function() {
@@ -228,7 +283,142 @@
           container.insertBefore(errorMsg, container.firstChild);
         };
         
-        container.appendChild(imgElem);
+        // 創建圖片容器並添加放大鏡功能
+        const imgContainer = document.createElement('div');
+        imgContainer.className = 'mermaid-img-container';
+        imgContainer.appendChild(imgElem);
+        
+        // 創建放大鏡元素
+        const magnifier = document.createElement('div');
+        magnifier.className = 'magnifier-glass';
+        imgContainer.appendChild(magnifier);
+        
+        // 放大鏡配置和狀態管理
+        const magnifierConfig = {
+          active: false,
+          sizeRatio: 0.5,  // 放大鏡尺寸為圖片的50%
+          zoomLevel: 1.5,  // 放大倍率
+          
+          // 更新放大鏡大小和設置
+          updateSize: function(rect) {
+            // 根據圖片尺寸設置放大鏡大小
+            magnifier.style.width = (rect.width * this.sizeRatio) + 'px';
+            magnifier.style.height = (rect.height * this.sizeRatio) + 'px';
+            
+            if (this.active) {
+              // 計算放大後的圖片尺寸
+              const zoomedWidth = rect.width * this.zoomLevel;
+              const zoomedHeight = rect.height * this.zoomLevel;
+              
+              // 設置背景尺寸
+              magnifier.style.backgroundImage = `url(${imgElem.src})`;
+              magnifier.style.backgroundSize = `${zoomedWidth}px ${zoomedHeight}px`;
+            }
+          },
+          
+          // 更新放大鏡位置和背景
+          updatePosition: function(e, rect) {
+            if (!this.active) return;
+            
+            // 獲取鼠標相對於圖片的坐標
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            // 獲取放大鏡尺寸
+            const magWidth = magnifier.offsetWidth;
+            const magHeight = magnifier.offsetHeight;
+            
+            // 放置在鼠標位置，中心對準鼠標
+            const magX = x - magWidth / 2;
+            const magY = y - magHeight / 2;
+            magnifier.style.left = magX + 'px';
+            magnifier.style.top = magY + 'px';
+            
+            // 計算放大後的圖片尺寸
+            const zoomedWidth = rect.width * this.zoomLevel;
+            const zoomedHeight = rect.height * this.zoomLevel;
+            
+            // 設置放大鏡背景
+            magnifier.style.backgroundImage = `url(${imgElem.src})`;
+            magnifier.style.backgroundSize = `${zoomedWidth}px ${zoomedHeight}px`;
+            
+            // 計算背景位置，確保鼠標位置在放大倍數下正確對應
+            // 放大鏡背景需要向反方向移動，以確保放大鏡中心對應鼠標位置
+            const bgX = -(x * this.zoomLevel - magWidth / 2);
+            const bgY = -(y * this.zoomLevel - magHeight / 2);
+            
+            magnifier.style.backgroundPosition = `${bgX}px ${bgY}px`;
+          },
+          
+          // 切換放大鏡狀態
+          toggle: function() {
+            this.active = !this.active;
+            const rect = imgElem.getBoundingClientRect();
+            
+            if (this.active) {
+              this.updateSize(rect);
+              magnifier.style.display = 'block';
+              imgElem.style.cursor = 'crosshair';
+            } else {
+              magnifier.style.display = 'none';
+              imgElem.style.cursor = 'zoom-in';
+            }
+          }
+        };
+        
+        // 確保圖片加載後配置放大鏡
+        imgElem.onload = function() {
+          const rect = imgElem.getBoundingClientRect();
+          
+          // 根據圖片尺寸設置放大鏡大小
+          magnifier.style.width = (rect.width * magnifierConfig.sizeRatio) + 'px';
+          magnifier.style.height = (rect.height * magnifierConfig.sizeRatio) + 'px';
+          
+          // 計算放大後的圖片尺寸
+          if (magnifierConfig.active) {
+            const zoomedWidth = rect.width * magnifierConfig.zoomLevel;
+            const zoomedHeight = rect.height * magnifierConfig.zoomLevel;
+            
+            magnifier.style.backgroundImage = `url(${imgElem.src})`;
+            magnifier.style.backgroundSize = `${zoomedWidth}px ${zoomedHeight}px`;
+            
+            // 初始設置背景位置在中心
+            const magWidth = magnifier.offsetWidth;
+            const magHeight = magnifier.offsetHeight;
+            const centerX = rect.width / 2;
+            const centerY = rect.height / 2;
+            
+            const bgX = -(centerX * magnifierConfig.zoomLevel - magWidth / 2);
+            const bgY = -(centerY * magnifierConfig.zoomLevel - magHeight / 2);
+            
+            magnifier.style.backgroundPosition = `${bgX}px ${bgY}px`;
+          }
+        };
+        
+        // 處理滑鼠移動
+        function handleMouseMove(e) {
+          const rect = imgElem.getBoundingClientRect();
+          magnifierConfig.updatePosition(e, rect);
+        }
+        
+        // 點擊圖片切換放大鏡
+        imgElem.addEventListener('click', function() {
+          magnifierConfig.toggle();
+        });
+        
+        imgElem.addEventListener('mousemove', handleMouseMove);
+        
+        imgElem.addEventListener('mouseenter', function() {
+          if (magnifierConfig.active) {
+            magnifier.style.display = 'block';
+          }
+        });
+        
+        imgElem.addEventListener('mouseleave', function() {
+          magnifier.style.display = 'none';
+        });
+        
+        container.appendChild(imgContainer);
         
         // 添加按鈕容器
         const buttonContainer = document.createElement('div');
